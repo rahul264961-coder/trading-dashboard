@@ -15,6 +15,7 @@ def get_data(symbol, interval):
 
     try:
         res = requests.get(BASE_URL, params=params, timeout=5)
+        res.raise_for_status()
         data = res.json()
     except:
         return pd.DataFrame()
@@ -151,7 +152,6 @@ def strategy(symbol):
 def dashboard():
 
     interval = request.args.get("tf", "15m")
-
     rows = ""
 
     for sym in SYMBOLS:
@@ -169,6 +169,19 @@ def dashboard():
             continue
 
         df = get_data(sym, interval)
+
+        # ✅ FINAL FIX (CRASH STOPPER)
+        if df is None or df.empty:
+            rows += f"""
+            <tr>
+                <td>{sym}</td>
+                <td>0</td>
+                <td>0</td>
+                <td style='color:red'>NO DATA</td>
+            </tr>
+            """
+            continue
+
         last = df.iloc[-1]
 
         rows += f"""
