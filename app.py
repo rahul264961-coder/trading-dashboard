@@ -6,6 +6,10 @@ app = Flask(__name__)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
+
 # ================= MULTI API DATA =================
 def get_data(symbol, interval):
 
@@ -19,7 +23,7 @@ def get_data(symbol, interval):
     try:
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": 200}
-        res = requests.get(url, params=params, timeout=3)
+        res = requests.get(url, params=params, timeout=10, headers=HEADERS)
         data = res.json()
 
         if isinstance(data, list):
@@ -28,7 +32,8 @@ def get_data(symbol, interval):
                 "ct","qav","nt","tbv","tqv","ignore"
             ])
             for col in ["open","high","low","close"]:
-                df[col] = pd.to_numeric(df[col])
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df.dropna(inplace=True)
             return df
     except:
         pass
@@ -42,14 +47,15 @@ def get_data(symbol, interval):
             "interval": interval_map.get(interval, "15"),
             "limit": 200
         }
-        res = requests.get(url, params=params, timeout=3).json()
+        res = requests.get(url, params=params, timeout=10, headers=HEADERS).json()
 
         data = res.get("result", {}).get("list", [])
         if data:
             df = pd.DataFrame(data, columns=["time","open","high","low","close","volume","turnover"])
             df = df[::-1]
             for col in ["open","high","low","close"]:
-                df[col] = pd.to_numeric(df[col])
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            df.dropna(inplace=True)
             return df
     except:
         pass
@@ -62,22 +68,16 @@ def get_data(symbol, interval):
             "resolution": interval_map.get(interval, "15"),
             "limit": 200
         }
-        res = requests.get(url, params=params, timeout=3).json()
+        res = requests.get(url, params=params, timeout=10, headers=HEADERS).json()
 
         data = res.get("result", [])
         if data:
             df = pd.DataFrame(data)
-            df.rename(columns={
-                "time":"time",
-                "open":"open",
-                "high":"high",
-                "low":"low",
-                "close":"close"
-            }, inplace=True)
 
             for col in ["open","high","low","close"]:
-                df[col] = pd.to_numeric(df[col])
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
+            df.dropna(inplace=True)
             return df
     except:
         pass
@@ -205,6 +205,16 @@ def dashboard():
     for sym in SYMBOLS:
         signal, color, price = strategy(sym)
 
+        if signal == "NO DATA":
+            rows += f"""
+            <tr>
+                <td>{sym}</td>
+                <td>0</td>
+                <td style='color:red'>NO DATA</td>
+            </tr>
+            """
+            continue
+
         rows += f"""
         <tr>
             <td>{sym}</td>
@@ -216,7 +226,7 @@ def dashboard():
     return f"""
     <html>
     <body style="background:black; color:white;">
-        <h2>🔥 PRO Trading Bot (Multi API)</h2>
+        <h2>🔥 PRO Trading Bot (Stable)</h2>
         <table border="1" cellpadding="10">
             <tr>
                 <th>COIN</th>
