@@ -1,39 +1,88 @@
 from flask import Flask, request
 import requests
 import pandas as pd
-import plotly.graph_objs as go
 
 app = Flask(__name__)
 
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "PAXGUSDT"]
-BASE_URL = "https://api.binance.com/api/v3/klines"
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
 
-
-# ================= DATA =================
+# ================= MULTI API DATA =================
 def get_data(symbol, interval):
-    params = {"symbol": symbol, "interval": interval, "limit": 200}
 
+    interval_map = {
+        "15m": "15",
+        "1h": "60",
+        "4h": "240"
+    }
+
+    # ========= 1. BINANCE =========
     try:
-        res = requests.get(BASE_URL, params=params, timeout=5)
-        res.raise_for_status()
+        url = "https://api.binance.com/api/v3/klines"
+        params = {"symbol": symbol, "interval": interval, "limit": 200}
+        res = requests.get(url, params=params, timeout=3)
         data = res.json()
+
+        if isinstance(data, list):
+            df = pd.DataFrame(data, columns=[
+                "time","open","high","low","close","volume",
+                "ct","qav","nt","tbv","tqv","ignore"
+            ])
+            for col in ["open","high","low","close"]:
+                df[col] = pd.to_numeric(df[col])
+            return df
     except:
-        return pd.DataFrame()
+        pass
 
-    if not data or isinstance(data, dict):
-        return pd.DataFrame()
+    # ========= 2. BYBIT =========
+    try:
+        url = "https://api.bybit.com/v5/market/kline"
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": interval_map.get(interval, "15"),
+            "limit": 200
+        }
+        res = requests.get(url, params=params, timeout=3).json()
 
-    df = pd.DataFrame(data, columns=[
-        "time","open","high","low","close","volume",
-        "ct","qav","nt","tbv","tqv","ignore"
-    ])
+        data = res.get("result", {}).get("list", [])
+        if data:
+            df = pd.DataFrame(data, columns=["time","open","high","low","close","volume","turnover"])
+            df = df[::-1]
+            for col in ["open","high","low","close"]:
+                df[col] = pd.to_numeric(df[col])
+            return df
+    except:
+        pass
 
-    for col in ["open","high","low","close"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    # ========= 3. DELTA =========
+    try:
+        url = "https://api.delta.exchange/v2/history/candles"
+        params = {
+            "symbol": symbol.replace("USDT", ""),
+            "resolution": interval_map.get(interval, "15"),
+            "limit": 200
+        }
+        res = requests.get(url, params=params, timeout=3).json()
 
-    df.dropna(inplace=True)
+        data = res.get("result", [])
+        if data:
+            df = pd.DataFrame(data)
+            df.rename(columns={
+                "time":"time",
+                "open":"open",
+                "high":"high",
+                "low":"low",
+                "close":"close"
+            }, inplace=True)
 
-    return df
+            for col in ["open","high","low","close"]:
+                df[col] = pd.to_numeric(df[col])
+
+            return df
+    except:
+        pass
+
+    return pd.DataFrame()
 
 
 # ================= EMA =================
@@ -47,7 +96,7 @@ def apply_ema(df):
     return df
 
 
-# ================= SAFE TREND =================
+# ================= TREND =================
 def trend(df):
     if df.empty or len(df) < 3:
         return "SIDE"
@@ -61,7 +110,7 @@ def trend(df):
     return "SIDE"
 
 
-# ================= SAFE SWING =================
+# ================= SWING =================
 def swing(df):
     if df.empty or len(df) < 3:
         return "NONE"
@@ -76,7 +125,7 @@ def swing(df):
     return "NONE"
 
 
-# ================= SAFE PREV DAY =================
+# ================= PREV DAY =================
 def prev_day(df):
     if df.empty:
         return 0
@@ -87,7 +136,7 @@ def prev_day(df):
 
 # ================= PULLBACK =================
 def advanced_pullback(df):
-    if df.empty or len(df) < 1:
+    if df.empty:
         return None, None
 
     curr = df.iloc[-1]
@@ -151,60 +200,27 @@ def strategy(symbol):
 @app.route("/")
 def dashboard():
 
-    interval = request.args.get("tf", "15m")
     rows = ""
 
     for sym in SYMBOLS:
         signal, color, price = strategy(sym)
 
-        if signal == "NO DATA":
-            rows += f"""
-            <tr>
-                <td>{sym}</td>
-                <td>0</td>
-                <td>0</td>
-                <td style='color:red'>NO DATA</td>
-            </tr>
-            """
-            continue
-
-        df = get_data(sym, interval)
-
-        # ✅ FINAL FIX (CRASH STOPPER)
-        if df is None or df.empty:
-            rows += f"""
-            <tr>
-                <td>{sym}</td>
-                <td>0</td>
-                <td>0</td>
-                <td style='color:red'>NO DATA</td>
-            </tr>
-            """
-            continue
-
-        last = df.iloc[-1]
-
         rows += f"""
         <tr>
             <td>{sym}</td>
-            <td>{last["open"]:.2f}</td>
-            <td>{last["close"]:.2f}</td>
+            <td>{price:.2f}</td>
             <td style='color:{color}'>{signal}</td>
         </tr>
         """
 
     return f"""
     <html>
-    <head>
-        <meta http-equiv="refresh" content="10">
-    </head>
-    <body style="background:black; color:white; font-family:Arial;">
-        <h2>🚀 PRO Trading Dashboard</h2>
+    <body style="background:black; color:white;">
+        <h2>🔥 PRO Trading Bot (Multi API)</h2>
         <table border="1" cellpadding="10">
             <tr>
                 <th>COIN</th>
-                <th>OPEN</th>
-                <th>CLOSE</th>
+                <th>PRICE</th>
                 <th>SIGNAL</th>
             </tr>
             {rows}
