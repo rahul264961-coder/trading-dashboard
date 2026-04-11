@@ -24,21 +24,26 @@ def get_data(symbol, interval):
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": 200}
         res = requests.get(url, params=params, timeout=10, headers=HEADERS)
-        data = res.json()
 
-        if isinstance(data, list):
-            df = pd.DataFrame(data, columns=[
-                "time","open","high","low","close","volume",
-                "ct","qav","nt","tbv","tqv","ignore"
-            ])
-            for col in ["open","high","low","close"]:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-            df.dropna(inplace=True)
+        if res.status_code == 200:
+            data = res.json()
 
-            print(f"{symbol} {interval} → BINANCE OK ({len(df)})")
-            return df
-    except:
-        pass
+            if isinstance(data, list) and len(data) > 0:
+                df = pd.DataFrame(data, columns=[
+                    "time","open","high","low","close","volume",
+                    "ct","qav","nt","tbv","tqv","ignore"
+                ])
+
+                for col in ["open","high","low","close"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                df.dropna(inplace=True)
+
+                if not df.empty:
+                    print(f"{symbol} {interval} → BINANCE ✅")
+                    return df
+    except Exception as e:
+        print("Binance error:", e)
 
     # ========= 2. BYBIT =========
     try:
@@ -49,46 +54,58 @@ def get_data(symbol, interval):
             "interval": interval_map.get(interval, "15"),
             "limit": 200
         }
-        res = requests.get(url, params=params, timeout=10, headers=HEADERS).json()
 
-        data = res.get("result", {}).get("list", [])
-        if data:
-            df = pd.DataFrame(data, columns=["time","open","high","low","close","volume","turnover"])
-            df = df[::-1]
+        res = requests.get(url, params=params, timeout=10, headers=HEADERS)
 
-            for col in ["open","high","low","close"]:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if res.status_code == 200:
+            data = res.json().get("result", {}).get("list", [])
 
-            df.dropna(inplace=True)
+            if data:
+                df = pd.DataFrame(data, columns=[
+                    "time","open","high","low","close","volume","turnover"
+                ])
 
-            print(f"{symbol} {interval} → BYBIT OK ({len(df)})")
-            return df
-    except:
-        pass
+                df = df[::-1]
+
+                for col in ["open","high","low","close"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                df.dropna(inplace=True)
+
+                if not df.empty:
+                    print(f"{symbol} {interval} → BYBIT ✅")
+                    return df
+    except Exception as e:
+        print("Bybit error:", e)
 
     # ========= 3. DELTA =========
     try:
         url = "https://api.delta.exchange/v2/history/candles"
+
         params = {
-            "symbol": symbol,   # ✅ FIX (NO replace)
+            "symbol": symbol,  # keep same
             "resolution": interval_map.get(interval, "15"),
             "limit": 200
         }
-        res = requests.get(url, params=params, timeout=10, headers=HEADERS).json()
 
-        data = res.get("result", [])
-        if data:
-            df = pd.DataFrame(data)
+        res = requests.get(url, params=params, timeout=10, headers=HEADERS)
 
-            for col in ["open","high","low","close"]:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if res.status_code == 200:
+            data = res.json().get("result", [])
 
-            df.dropna(inplace=True)
+            if data:
+                df = pd.DataFrame(data)
 
-            print(f"{symbol} {interval} → DELTA OK ({len(df)})")
-            return df
-    except:
-        pass
+                for col in ["open","high","low","close"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                df.dropna(inplace=True)
+
+                if not df.empty:
+                    print(f"{symbol} {interval} → DELTA ✅")
+                    return df
+    except Exception as e:
+        print("Delta error:", e)
 
     print(f"{symbol} {interval} → ALL API FAIL ❌")
     return pd.DataFrame()
@@ -180,7 +197,6 @@ def strategy(symbol):
     df1h = apply_ema(get_data(symbol, "1h"))
     df4h = apply_ema(get_data(symbol, "4h"))
 
-    # ✅ FIX: sirf 15m mandatory
     if df15.empty:
         return "NO DATA", "red", 0
 
@@ -232,7 +248,7 @@ def dashboard():
     return f"""
     <html>
     <body style="background:black; color:white;">
-        <h2>🔥 PRO Trading Bot (FINAL FIX)</h2>
+        <h2>🔥 PRO Trading Bot (FINAL WORKING)</h2>
         <table border="1" cellpadding="10">
             <tr>
                 <th>COIN</th>
