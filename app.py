@@ -1,6 +1,7 @@
 from flask import Flask
 import requests
 import pandas as pd
+import plotly.graph_objs as go
 
 app = Flask(__name__)
 
@@ -19,7 +20,7 @@ def get_data(symbol, interval):
         "4h": "240"
     }
 
-    # ========= 1. BINANCE =========
+    # ========= BINANCE =========
     try:
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": 200}
@@ -27,87 +28,18 @@ def get_data(symbol, interval):
 
         if res.status_code == 200:
             data = res.json()
-
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data, columns=[
                     "time","open","high","low","close","volume",
                     "ct","qav","nt","tbv","tqv","ignore"
                 ])
-
                 for col in ["open","high","low","close"]:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
-
                 df.dropna(inplace=True)
+                return df
+    except:
+        pass
 
-                if not df.empty:
-                    print(f"{symbol} {interval} → BINANCE ✅")
-                    return df
-    except Exception as e:
-        print("Binance error:", e)
-
-    # ========= 2. BYBIT =========
-    try:
-        url = "https://api.bybit.com/v5/market/kline"
-        params = {
-            "category": "linear",
-            "symbol": symbol,
-            "interval": interval_map.get(interval, "15"),
-            "limit": 200
-        }
-
-        res = requests.get(url, params=params, timeout=10, headers=HEADERS)
-
-        if res.status_code == 200:
-            data = res.json().get("result", {}).get("list", [])
-
-            if data:
-                df = pd.DataFrame(data, columns=[
-                    "time","open","high","low","close","volume","turnover"
-                ])
-
-                df = df[::-1]
-
-                for col in ["open","high","low","close"]:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-
-                df.dropna(inplace=True)
-
-                if not df.empty:
-                    print(f"{symbol} {interval} → BYBIT ✅")
-                    return df
-    except Exception as e:
-        print("Bybit error:", e)
-
-    # ========= 3. DELTA =========
-    try:
-        url = "https://api.delta.exchange/v2/history/candles"
-
-        params = {
-            "symbol": symbol,  # keep same
-            "resolution": interval_map.get(interval, "15"),
-            "limit": 200
-        }
-
-        res = requests.get(url, params=params, timeout=10, headers=HEADERS)
-
-        if res.status_code == 200:
-            data = res.json().get("result", [])
-
-            if data:
-                df = pd.DataFrame(data)
-
-                for col in ["open","high","low","close"]:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-
-                df.dropna(inplace=True)
-
-                if not df.empty:
-                    print(f"{symbol} {interval} → DELTA ✅")
-                    return df
-    except Exception as e:
-        print("Delta error:", e)
-
-    print(f"{symbol} {interval} → ALL API FAIL ❌")
     return pd.DataFrame()
 
 
@@ -122,7 +54,7 @@ def apply_ema(df):
     return df
 
 
-# ================= TREND =================
+# ================= STRATEGY SAME =================
 def trend(df):
     if df.empty or len(df) < 3:
         return "SIDE"
@@ -136,7 +68,6 @@ def trend(df):
     return "SIDE"
 
 
-# ================= SWING =================
 def swing(df):
     if df.empty or len(df) < 3:
         return "NONE"
@@ -151,7 +82,6 @@ def swing(df):
     return "NONE"
 
 
-# ================= PREV DAY =================
 def prev_day(df):
     if df.empty:
         return 0
@@ -160,7 +90,6 @@ def prev_day(df):
     return df["close"].iloc[-24]
 
 
-# ================= PULLBACK =================
 def advanced_pullback(df):
     if df.empty:
         return None, None
@@ -190,7 +119,6 @@ def advanced_pullback(df):
     return None, None
 
 
-# ================= STRATEGY =================
 def strategy(symbol):
 
     df15 = apply_ema(get_data(symbol, "15m"))
@@ -228,6 +156,35 @@ def strategy(symbol):
     return "-", "white", price
 
 
+# ================= CHART =================
+def get_chart():
+    df = apply_ema(get_data("BTCUSDT", "15m"))
+
+    if df.empty:
+        return "<h3>No Chart Data</h3>"
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Candlestick(
+        x=df.index,
+        open=df['open'],
+        high=df['high'],
+        low=df['low'],
+        close=df['close']
+    ))
+
+    fig.add_trace(go.Scatter(x=df.index, y=df['ema9'], name="EMA 9"))
+    fig.add_trace(go.Scatter(x=df.index, y=df['ema15'], name="EMA 15"))
+    fig.add_trace(go.Scatter(x=df.index, y=df['ema200'], name="EMA 200"))
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=500
+    )
+
+    return fig.to_html(full_html=False)
+
+
 # ================= DASHBOARD =================
 @app.route("/")
 def dashboard():
@@ -245,18 +202,37 @@ def dashboard():
         </tr>
         """
 
+    chart = get_chart()
+
     return f"""
     <html>
-    <body style="background:black; color:white;">
-        <h2>🔥 PRO Trading Bot (FINAL WORKING)</h2>
-        <table border="1" cellpadding="10">
-            <tr>
-                <th>COIN</th>
-                <th>PRICE</th>
-                <th>SIGNAL</th>
-            </tr>
-            {rows}
-        </table>
+    <head>
+        <meta http-equiv="refresh" content="10">
+    </head>
+
+    <body style="background:#0e1117; color:white; font-family:sans-serif;">
+
+        <h2>🚀 Trading Dashboard PRO</h2>
+
+        <div style="display:flex; gap:20px;">
+
+            <div style="width:30%;">
+                <table border="1" cellpadding="10">
+                    <tr>
+                        <th>COIN</th>
+                        <th>PRICE</th>
+                        <th>SIGNAL</th>
+                    </tr>
+                    {rows}
+                </table>
+            </div>
+
+            <div style="width:70%;">
+                {chart}
+            </div>
+
+        </div>
+
     </body>
     </html>
     """
