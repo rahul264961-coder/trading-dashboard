@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask
 import requests
 import pandas as pd
 
@@ -34,6 +34,8 @@ def get_data(symbol, interval):
             for col in ["open","high","low","close"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             df.dropna(inplace=True)
+
+            print(f"{symbol} {interval} → BINANCE OK ({len(df)})")
             return df
     except:
         pass
@@ -53,9 +55,13 @@ def get_data(symbol, interval):
         if data:
             df = pd.DataFrame(data, columns=["time","open","high","low","close","volume","turnover"])
             df = df[::-1]
+
             for col in ["open","high","low","close"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
+
             df.dropna(inplace=True)
+
+            print(f"{symbol} {interval} → BYBIT OK ({len(df)})")
             return df
     except:
         pass
@@ -64,7 +70,7 @@ def get_data(symbol, interval):
     try:
         url = "https://api.delta.exchange/v2/history/candles"
         params = {
-            "symbol": symbol.replace("USDT", ""),
+            "symbol": symbol,   # ✅ FIX (NO replace)
             "resolution": interval_map.get(interval, "15"),
             "limit": 200
         }
@@ -78,10 +84,13 @@ def get_data(symbol, interval):
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
             df.dropna(inplace=True)
+
+            print(f"{symbol} {interval} → DELTA OK ({len(df)})")
             return df
     except:
         pass
 
+    print(f"{symbol} {interval} → ALL API FAIL ❌")
     return pd.DataFrame()
 
 
@@ -171,8 +180,15 @@ def strategy(symbol):
     df1h = apply_ema(get_data(symbol, "1h"))
     df4h = apply_ema(get_data(symbol, "4h"))
 
-    if df15.empty or df1h.empty or df4h.empty:
+    # ✅ FIX: sirf 15m mandatory
+    if df15.empty:
         return "NO DATA", "red", 0
+
+    if df1h.empty:
+        df1h = df15.copy()
+
+    if df4h.empty:
+        df4h = df15.copy()
 
     t15 = trend(df15)
     t1h = trend(df1h)
@@ -205,16 +221,6 @@ def dashboard():
     for sym in SYMBOLS:
         signal, color, price = strategy(sym)
 
-        if signal == "NO DATA":
-            rows += f"""
-            <tr>
-                <td>{sym}</td>
-                <td>0</td>
-                <td style='color:red'>NO DATA</td>
-            </tr>
-            """
-            continue
-
         rows += f"""
         <tr>
             <td>{sym}</td>
@@ -226,7 +232,7 @@ def dashboard():
     return f"""
     <html>
     <body style="background:black; color:white;">
-        <h2>🔥 PRO Trading Bot (Stable)</h2>
+        <h2>🔥 PRO Trading Bot (FINAL FIX)</h2>
         <table border="1" cellpadding="10">
             <tr>
                 <th>COIN</th>
