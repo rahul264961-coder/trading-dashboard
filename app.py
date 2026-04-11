@@ -12,23 +12,34 @@ BASE_URL = "https://api.binance.com/api/v3/klines"
 # ================= DATA =================
 def get_data(symbol, interval):
     params = {"symbol": symbol, "interval": interval, "limit": 200}
-    data = requests.get(BASE_URL, params=params).json()
+
+    try:
+        res = requests.get(BASE_URL, params=params, timeout=5)
+        data = res.json()
+    except:
+        return pd.DataFrame()
+
+    if not data or isinstance(data, dict):
+        return pd.DataFrame()
 
     df = pd.DataFrame(data, columns=[
         "time","open","high","low","close","volume",
         "ct","qav","nt","tbv","tqv","ignore"
     ])
 
-    df["open"] = df["open"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    df["close"] = df["close"].astype(float)
+    for col in ["open","high","low","close"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df.dropna(inplace=True)
 
     return df
 
 
 # ================= EMA =================
 def apply_ema(df):
+    if df.empty:
+        return df
+
     df["ema9"] = df["close"].ewm(span=9).mean()
     df["ema15"] = df["close"].ewm(span=15).mean()
     df["ema200"] = df["close"].ewm(span=200).mean()
@@ -37,6 +48,9 @@ def apply_ema(df):
 
 # ================= TREND =================
 def trend(df):
+    if df.empty or len(df) < 3:
+        return "SIDE"
+
     last = df.iloc[-1]
 
     if last["close"] > last["ema9"] > last["ema15"] > last["ema200"]:
@@ -48,6 +62,9 @@ def trend(df):
 
 # ================= SWING =================
 def swing(df):
+    if df.empty or len(df) < 3:
+        return "NONE"
+
     highs = df["high"]
     lows = df["low"]
 
@@ -60,11 +77,17 @@ def swing(df):
 
 # ================= PREVIOUS DAY =================
 def prev_day(df):
+    if df.empty:
+        return 0
+    if len(df) < 24:
+        return df["close"].iloc[-1]
     return df["close"].iloc[-24]
 
 
 # ================= 🔥 REAL PULLBACK =================
 def advanced_pullback(df):
+    if df.empty:
+        return None, None
 
     curr = df.iloc[-1]
 
@@ -98,6 +121,9 @@ def strategy(symbol):
     df1h = apply_ema(get_data(symbol, "1h"))
     df4h = apply_ema(get_data(symbol, "4h"))
 
+    if df15.empty or df1h.empty or df4h.empty:
+        return "-", "white", 0
+
     t15 = trend(df15)
     t1h = trend(df1h)
     t4h = trend(df4h)
@@ -124,6 +150,9 @@ def strategy(symbol):
 def chart(symbol, interval):
 
     df = get_data(symbol, interval)
+
+    if df.empty:
+        return "<h3 style='color:white;'>No Data</h3>"
 
     fig = go.Figure(data=[go.Candlestick(
         open=df["open"],
@@ -158,6 +187,10 @@ def dashboard():
         signal, color, price = strategy(sym)
 
         df = get_data(sym, interval)
+
+        if df.empty:
+            continue
+
         last = df.iloc[-1]
 
         rows += f"""
@@ -169,23 +202,18 @@ def dashboard():
         </tr>
         """
 
-    html = f"""
+    return f"""
     <html>
     <head>
         <meta http-equiv="refresh" content="10">
     </head>
-
     <body style="background:black; color:white; font-family:Arial;">
-
         <h2>🚀 PRO Trading Dashboard</h2>
-
         <div>
-            Timeframe:
             <a href="/?tf=15m">15m</a> |
             <a href="/?tf=1h">1H</a> |
             <a href="/?tf=4h">4H</a>
         </div>
-
         <table border="1" cellpadding="10">
             <tr>
                 <th>COIN</th>
@@ -193,15 +221,11 @@ def dashboard():
                 <th>CLOSE</th>
                 <th>SIGNAL</th>
             </tr>
-
             {rows}
         </table>
-
     </body>
     </html>
     """
-
-    return html
 
 
 # ================= FULL CHART =================
