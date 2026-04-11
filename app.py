@@ -72,16 +72,14 @@ def advanced_pullback(df):
     lower_wick = curr["open"] - curr["low"] if curr["close"] > curr["open"] else curr["close"] - curr["low"]
     upper_wick = curr["high"] - curr["close"] if curr["close"] > curr["open"] else curr["high"] - curr["open"]
 
-    # BUY pullback (EMA touch + lower wick rejection)
     if (
         curr["close"] > curr["ema200"] and
         curr["ema9"] > curr["ema15"] and
-        curr["low"] <= curr["ema15"] and  # touch EMA 15
-        lower_wick > body * 1.5           # strong rejection
+        curr["low"] <= curr["ema15"] and
+        lower_wick > body * 1.5
     ):
         return "BUY (PB)", "green"
 
-    # SELL pullback (EMA touch + upper wick rejection)
     elif (
         curr["close"] < curr["ema200"] and
         curr["ema9"] < curr["ema15"] and
@@ -109,12 +107,10 @@ def strategy(symbol):
 
     price = df15.iloc[-1]["close"]
 
-    # 🔥 NEW ADVANCED PULLBACK
     pb_signal, pb_color = advanced_pullback(df15)
     if pb_signal:
         return pb_signal, pb_color, price
 
-    # OLD STRATEGY (UNCHANGED)
     if t15 == "UP" and t1h == "UP" and t4h == "UP" and sw == "HH" and price > pd_level:
         return "BUY", "green", price
 
@@ -136,7 +132,6 @@ def chart(symbol, interval):
         close=df["close"]
     )])
 
-    # 🔥 LIVE PRICE LINE
     current_price = df["close"].iloc[-1]
 
     fig.add_hline(
@@ -229,4 +224,7 @@ def full_chart():
 
 # ================= RUN =================
 if __name__ == "__main__":
-    app.run(debug=True)
+    import os
+
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
