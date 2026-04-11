@@ -46,7 +46,7 @@ def apply_ema(df):
     return df
 
 
-# ================= TREND =================
+# ================= SAFE TREND =================
 def trend(df):
     if df.empty or len(df) < 3:
         return "SIDE"
@@ -60,7 +60,7 @@ def trend(df):
     return "SIDE"
 
 
-# ================= SWING =================
+# ================= SAFE SWING =================
 def swing(df):
     if df.empty or len(df) < 3:
         return "NONE"
@@ -75,7 +75,7 @@ def swing(df):
     return "NONE"
 
 
-# ================= PREVIOUS DAY =================
+# ================= SAFE PREV DAY =================
 def prev_day(df):
     if df.empty:
         return 0
@@ -84,9 +84,9 @@ def prev_day(df):
     return df["close"].iloc[-24]
 
 
-# ================= 🔥 REAL PULLBACK =================
+# ================= PULLBACK =================
 def advanced_pullback(df):
-    if df.empty:
+    if df.empty or len(df) < 1:
         return None, None
 
     curr = df.iloc[-1]
@@ -122,7 +122,7 @@ def strategy(symbol):
     df4h = apply_ema(get_data(symbol, "4h"))
 
     if df15.empty or df1h.empty or df4h.empty:
-        return "-", "white", 0
+        return "NO DATA", "red", 0
 
     t15 = trend(df15)
     t1h = trend(df1h)
@@ -146,35 +146,6 @@ def strategy(symbol):
     return "-", "white", price
 
 
-# ================= CHART =================
-def chart(symbol, interval):
-
-    df = get_data(symbol, interval)
-
-    if df.empty:
-        return "<h3 style='color:white;'>No Data</h3>"
-
-    fig = go.Figure(data=[go.Candlestick(
-        open=df["open"],
-        high=df["high"],
-        low=df["low"],
-        close=df["close"]
-    )])
-
-    current_price = df["close"].iloc[-1]
-
-    fig.add_hline(
-        y=current_price,
-        line_dash="dash",
-        annotation_text=f"Live: {current_price}",
-        annotation_position="top right"
-    )
-
-    fig.update_layout(template="plotly_dark", height=600)
-
-    return fig.to_html(full_html=False)
-
-
 # ================= DASHBOARD =================
 @app.route("/")
 def dashboard():
@@ -186,16 +157,23 @@ def dashboard():
     for sym in SYMBOLS:
         signal, color, price = strategy(sym)
 
-        df = get_data(sym, interval)
-
-        if df.empty:
+        if signal == "NO DATA":
+            rows += f"""
+            <tr>
+                <td>{sym}</td>
+                <td>0</td>
+                <td>0</td>
+                <td style='color:red'>NO DATA</td>
+            </tr>
+            """
             continue
 
+        df = get_data(sym, interval)
         last = df.iloc[-1]
 
         rows += f"""
         <tr>
-            <td><a href="/chart?symbol={sym}&tf={interval}" target="_blank">{sym}</a></td>
+            <td>{sym}</td>
             <td>{last["open"]:.2f}</td>
             <td>{last["close"]:.2f}</td>
             <td style='color:{color}'>{signal}</td>
@@ -209,11 +187,6 @@ def dashboard():
     </head>
     <body style="background:black; color:white; font-family:Arial;">
         <h2>🚀 PRO Trading Dashboard</h2>
-        <div>
-            <a href="/?tf=15m">15m</a> |
-            <a href="/?tf=1h">1H</a> |
-            <a href="/?tf=4h">4H</a>
-        </div>
         <table border="1" cellpadding="10">
             <tr>
                 <th>COIN</th>
@@ -223,24 +196,6 @@ def dashboard():
             </tr>
             {rows}
         </table>
-    </body>
-    </html>
-    """
-
-
-# ================= FULL CHART =================
-@app.route("/chart")
-def full_chart():
-    symbol = request.args.get("symbol")
-    interval = request.args.get("tf", "15m")
-
-    chart_html = chart(symbol, interval)
-
-    return f"""
-    <html>
-    <body style="background:black;">
-        <h2 style="color:white;">{symbol} - {interval}</h2>
-        {chart_html}
     </body>
     </html>
     """
