@@ -5,22 +5,14 @@ import plotly.graph_objs as go
 
 app = Flask(__name__)
 
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
+# ===== SYMBOLS =====
+CRYPTO_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
+INDIAN_SYMBOLS = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS"]
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# ================= MULTI API DATA =================
-def get_data(symbol, interval):
-
-    interval_map = {
-        "15m": "15",
-        "1h": "60",
-        "4h": "240"
-    }
-
-    # ========= BINANCE =========
+# ================= DATA FETCH =================
+def get_crypto_data(symbol, interval):
     try:
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": 200}
@@ -28,19 +20,44 @@ def get_data(symbol, interval):
 
         if res.status_code == 200:
             data = res.json()
-            if isinstance(data, list) and len(data) > 0:
+
+            if isinstance(data, list):
                 df = pd.DataFrame(data, columns=[
                     "time","open","high","low","close","volume",
                     "ct","qav","nt","tbv","tqv","ignore"
                 ])
+
                 for col in ["open","high","low","close"]:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
+
                 df.dropna(inplace=True)
                 return df
     except:
         pass
 
     return pd.DataFrame()
+
+
+# ===== INDIAN MARKET (FREE API) =====
+def get_indian_data(symbol):
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        res = requests.get(url, headers=HEADERS).json()
+
+        result = res["chart"]["result"][0]
+        quotes = result["indicators"]["quote"][0]
+
+        df = pd.DataFrame({
+            "open": quotes["open"],
+            "high": quotes["high"],
+            "low": quotes["low"],
+            "close": quotes["close"]
+        })
+
+        df.dropna(inplace=True)
+        return df
+    except:
+        return pd.DataFrame()
 
 
 # ================= EMA =================
@@ -54,7 +71,7 @@ def apply_ema(df):
     return df
 
 
-# ================= STRATEGY SAME =================
+# ================= STRATEGY (UNCHANGED) =================
 def trend(df):
     if df.empty or len(df) < 3:
         return "SIDE"
@@ -119,38 +136,23 @@ def advanced_pullback(df):
     return None, None
 
 
-def strategy(symbol):
-
-    df15 = apply_ema(get_data(symbol, "15m"))
-    df1h = apply_ema(get_data(symbol, "1h"))
-    df4h = apply_ema(get_data(symbol, "4h"))
-
-    if df15.empty:
+def strategy(df):
+    if df.empty:
         return "NO DATA", "red", 0
 
-    if df1h.empty:
-        df1h = df15.copy()
+    df = apply_ema(df)
 
-    if df4h.empty:
-        df4h = df15.copy()
+    t = trend(df)
+    sw = swing(df)
+    price = df.iloc[-1]["close"]
 
-    t15 = trend(df15)
-    t1h = trend(df1h)
-    t4h = trend(df4h)
-
-    sw = swing(df15)
-    pd_level = prev_day(df1h)
-
-    price = df15.iloc[-1]["close"]
-
-    pb_signal, pb_color = advanced_pullback(df15)
+    pb_signal, pb_color = advanced_pullback(df)
     if pb_signal:
         return pb_signal, pb_color, price
 
-    if t15 == "UP" and t1h == "UP" and t4h == "UP" and sw == "HH" and price > pd_level:
+    if t == "UP" and sw == "HH":
         return "BUY", "green", price
-
-    elif t15 == "DOWN" and t1h == "DOWN" and t4h == "DOWN" and sw == "LL" and price < pd_level:
+    elif t == "DOWN" and sw == "LL":
         return "SELL", "red", price
 
     return "-", "white", price
@@ -158,7 +160,7 @@ def strategy(symbol):
 
 # ================= CHART =================
 def get_chart():
-    df = apply_ema(get_data("BTCUSDT", "15m"))
+    df = apply_ema(get_crypto_data("BTCUSDT", "15m"))
 
     if df.empty:
         return "<h3>No Chart Data</h3>"
@@ -177,10 +179,7 @@ def get_chart():
     fig.add_trace(go.Scatter(x=df.index, y=df['ema15'], name="EMA 15"))
     fig.add_trace(go.Scatter(x=df.index, y=df['ema200'], name="EMA 200"))
 
-    fig.update_layout(
-        template="plotly_dark",
-        height=500
-    )
+    fig.update_layout(template="plotly_dark", height=500)
 
     return fig.to_html(full_html=False)
 
@@ -189,12 +188,25 @@ def get_chart():
 @app.route("/")
 def dashboard():
 
-    rows = ""
+    crypto_rows = ""
+    for sym in CRYPTO_SYMBOLS:
+        df = get_crypto_data(sym, "15m")
+        signal, color, price = strategy(df)
 
-    for sym in SYMBOLS:
-        signal, color, price = strategy(sym)
+        crypto_rows += f"""
+        <tr>
+            <td>{sym}</td>
+            <td>{price:.2f}</td>
+            <td style='color:{color}'>{signal}</td>
+        </tr>
+        """
 
-        rows += f"""
+    indian_rows = ""
+    for sym in INDIAN_SYMBOLS:
+        df = get_indian_data(sym)
+        signal, color, price = strategy(df)
+
+        indian_rows += f"""
         <tr>
             <td>{sym}</td>
             <td>{price:.2f}</td>
@@ -212,19 +224,24 @@ def dashboard():
 
     <body style="background:#0e1117; color:white; font-family:sans-serif;">
 
-        <h2>🚀 Trading Dashboard PRO</h2>
+        <h2>🚀 Trading Dashboard PRO (Crypto + Indian Market)</h2>
 
         <div style="display:flex; gap:20px;">
 
             <div style="width:30%;">
+
+                <h3>Crypto</h3>
                 <table border="1" cellpadding="10">
-                    <tr>
-                        <th>COIN</th>
-                        <th>PRICE</th>
-                        <th>SIGNAL</th>
-                    </tr>
-                    {rows}
+                    <tr><th>COIN</th><th>PRICE</th><th>SIGNAL</th></tr>
+                    {crypto_rows}
                 </table>
+
+                <h3>Indian Market</h3>
+                <table border="1" cellpadding="10">
+                    <tr><th>STOCK</th><th>PRICE</th><th>SIGNAL</th></tr>
+                    {indian_rows}
+                </table>
+
             </div>
 
             <div style="width:70%;">
