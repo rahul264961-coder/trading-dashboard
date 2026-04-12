@@ -2,21 +2,10 @@ from flask import Flask
 import requests
 import pandas as pd
 import plotly.graph_objs as go
-import numpy as np
 
 app = Flask(__name__)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
-
-# ================= FALLBACK =================
-def fallback_data():
-    data = {
-        "open": np.random.rand(200)*100 + 100,
-        "high": np.random.rand(200)*100 + 150,
-        "low": np.random.rand(200)*100 + 80,
-        "close": np.random.rand(200)*100 + 100
-    }
-    return pd.DataFrame(data)
 
 # ================= MULTI API =================
 def get_data(symbol, interval):
@@ -27,7 +16,7 @@ def get_data(symbol, interval):
         "4h": "240"
     }
 
-    # ✅ 1. BINANCE
+    # ===== BINANCE =====
     try:
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": 200}
@@ -53,7 +42,7 @@ def get_data(symbol, interval):
     except Exception as e:
         print("Binance error:", e)
 
-    # ✅ 2. BYBIT (backup)
+    # ===== BYBIT =====
     try:
         url = "https://api.bybit.com/v5/market/kline"
         params = {
@@ -86,9 +75,40 @@ def get_data(symbol, interval):
     except Exception as e:
         print("Bybit error:", e)
 
-    # ⚠️ FINAL FALLBACK
-    print(f"{symbol} {interval} → FALLBACK USED ⚠️")
-    return fallback_data()
+    # ===== OKX =====
+    try:
+        url = "https://www.okx.com/api/v5/market/candles"
+        params = {
+            "instId": symbol.replace("USDT", "-USDT"),
+            "bar": interval,
+            "limit": 200
+        }
+
+        res = requests.get(url, params=params, timeout=10)
+
+        if res.status_code == 200:
+            data = res.json().get("data", [])
+
+            if data:
+                df = pd.DataFrame(data, columns=[
+                    "time","open","high","low","close","volume","volCcy","volCcyQuote","confirm"
+                ])
+
+                df = df[::-1]
+
+                for col in ["open","high","low","close"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                df.dropna(inplace=True)
+
+                if not df.empty:
+                    print(f"{symbol} {interval} → OKX ✅")
+                    return df
+    except Exception as e:
+        print("OKX error:", e)
+
+    print(f"{symbol} {interval} → ALL API FAIL ❌")
+    return pd.DataFrame()
 
 
 # ================= EMA =================
@@ -102,7 +122,7 @@ def apply_ema(df):
     return df
 
 
-# ================= STRATEGY (UNCHANGED) =================
+# ================= STRATEGY SAME =================
 def trend(df):
     if df.empty or len(df) < 3:
         return "SIDE"
@@ -174,7 +194,7 @@ def strategy(symbol):
     df4h = apply_ema(get_data(symbol, "4h"))
 
     if df15.empty:
-        return "NO DATA", "red", 0
+        return "NO DATA", "red", 0, 0, 0, 0
 
     if df1h.empty:
         df1h = df15.copy()
@@ -189,19 +209,24 @@ def strategy(symbol):
     sw = swing(df15)
     pd_level = prev_day(df1h)
 
-    price = df15.iloc[-1]["close"]
+    last = df15.iloc[-1]
+
+    open_p = last["open"]
+    high_p = last["high"]
+    low_p = last["low"]
+    close_p = last["close"]
 
     pb_signal, pb_color = advanced_pullback(df15)
     if pb_signal:
-        return pb_signal, pb_color, price
+        return pb_signal, pb_color, open_p, high_p, low_p, close_p
 
-    if t15 == "UP" and t1h == "UP" and t4h == "UP" and sw == "HH" and price > pd_level:
-        return "BUY", "green", price
+    if t15 == "UP" and t1h == "UP" and t4h == "UP" and sw == "HH" and close_p > pd_level:
+        return "BUY", "green", open_p, high_p, low_p, close_p
 
-    elif t15 == "DOWN" and t1h == "DOWN" and t4h == "DOWN" and sw == "LL" and price < pd_level:
-        return "SELL", "red", price
+    elif t15 == "DOWN" and t1h == "DOWN" and t4h == "DOWN" and sw == "LL" and close_p < pd_level:
+        return "SELL", "red", open_p, high_p, low_p, close_p
 
-    return "-", "white", price
+    return "-", "white", open_p, high_p, low_p, close_p
 
 
 # ================= CHART =================
@@ -234,12 +259,12 @@ def dashboard():
     rows = ""
 
     for sym in SYMBOLS:
-        signal, color, price = strategy(sym)
+        signal, color, o, h, l, c = strategy(sym)
 
         rows += f"""
         <tr>
             <td>{sym}</td>
-            <td>{price:.2f}</td>
+            <td>O:{o:.2f} H:{h:.2f} L:{l:.2f} C:{c:.2f}</td>
             <td style='color:{color}'>{signal}</td>
         </tr>
         """
@@ -254,7 +279,7 @@ def dashboard():
 
     <body style="background:#0e1117; color:white; font-family:sans-serif;">
 
-        <h2>🚀 Trading Dashboard PRO (FINAL FIX)</h2>
+        <h2>🚀 Trading Dashboard PRO FINAL</h2>
 
         <div style="display:flex; gap:20px;">
 
@@ -262,7 +287,7 @@ def dashboard():
                 <table border="1" cellpadding="10">
                     <tr>
                         <th>COIN</th>
-                        <th>PRICE</th>
+                        <th>OHLC</th>
                         <th>SIGNAL</th>
                     </tr>
                     {rows}
@@ -280,7 +305,6 @@ def dashboard():
     """
 
 
-# ================= RUN =================
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 10000))
