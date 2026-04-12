@@ -4,4 +4,4 @@ pandas
 requests
 plotly
 yfinance
-pandas_ta
+
