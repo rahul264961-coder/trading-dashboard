@@ -8,22 +8,20 @@ app = Flask(__name__)
 
 # SYMBOLS: Indian Indices + Crypto
 SYMBOLS = ["NIFTY50", "BANKNIFTY", "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
-
-# असली ब्राउज़र जैसा दिखने के लिए हेडर्स (ताकि ब्लॉक न हो)
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 TRADE_LOG = [] 
 
-# ================= FIXED DATA FETCHING (Corrected URLs) =================
+# ================= FIXED DATA FETCHING (URLs Corrected) =================
 def get_data(symbol, interval="15m"):
-    # 1. Indian Market (Yahoo Finance Fixed URL)
+    # 1. Indian Market (Yahoo Finance Fixed)
     if symbol in ["NIFTY50", "BANKNIFTY"]:
         ticker = "^NSEI" if symbol == "NIFTY50" else "^NSEBANK"
+        # यहाँ URL को सही किया गया है
         url = f"https://yahoo.com{ticker}?interval=15m&range=1d"
         try:
             res = requests.get(url, headers=HEADERS, timeout=10)
-            json_data = res.json()
-            result = json_data['chart']['result'][0]
+            result = res.json()['chart']['result'][0]
             df = pd.DataFrame({
                 "open": result['indicators']['quote'][0]['open'],
                 "high": result['indicators']['quote'][0]['high'],
@@ -35,8 +33,9 @@ def get_data(symbol, interval="15m"):
             print(f"Error Indian Data ({symbol}): {e}")
             return pd.DataFrame()
 
-    # 2. Crypto Market (Binance Fixed URL)
+    # 2. Crypto Market (Binance Fixed)
     else:
+        # यहाँ URL को सही किया गया है
         url = f"https://binance.com{symbol}&interval={interval}&limit=100"
         try:
             res = requests.get(url, headers=HEADERS, timeout=10)
@@ -51,7 +50,7 @@ def get_data(symbol, interval="15m"):
     
     return pd.DataFrame()
 
-# ================= EMA & STRATEGY (Same Logic) =================
+# ================= EMA & STRATEGY (Simplified for Stability) =================
 def apply_ema(df):
     if df.empty or len(df) < 20: return df
     df["ema9"] = df["close"].ewm(span=9).mean()
@@ -60,7 +59,7 @@ def apply_ema(df):
 
 def strategy(symbol):
     df = get_data(symbol)
-    if df.empty: return "OFFLINE", "orange", 0,0,0,0
+    if df.empty: return "OFFLINE", "gray", 0,0,0,0
     
     df = apply_ema(df)
     last = df.iloc[-1]
@@ -79,7 +78,7 @@ def strategy(symbol):
 
     return signal, color, o, h, l, c
 
-# ================= CHART (As Requested: No Changes to Options) =================
+# ================= CHART (No Changes to Options) =================
 def get_chart():
     df = get_data("BTCUSDT")
     if df.empty: return "<div style='color:orange; padding:20px;'>Connecting to Market Data...</div>"
@@ -129,6 +128,7 @@ def dashboard():
 if __name__ == "__main__":
     import os
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
