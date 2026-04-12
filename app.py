@@ -8,11 +8,7 @@ app = Flask(__name__)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
-
-# ================= FALLBACK DATA =================
+# ================= FALLBACK =================
 def fallback_data():
     data = {
         "open": np.random.rand(200)*100 + 100,
@@ -22,7 +18,7 @@ def fallback_data():
     }
     return pd.DataFrame(data)
 
-# ================= MULTI API DATA =================
+# ================= MULTI API =================
 def get_data(symbol, interval):
 
     interval_map = {
@@ -31,21 +27,24 @@ def get_data(symbol, interval):
         "4h": "240"
     }
 
-    # ========= BINANCE =========
+    # ✅ 1. BINANCE
     try:
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": 200}
-        res = requests.get(url, params=params, timeout=10, headers=HEADERS)
+        res = requests.get(url, params=params, timeout=10)
 
         if res.status_code == 200:
             data = res.json()
+
             if isinstance(data, list) and len(data) > 0:
                 df = pd.DataFrame(data, columns=[
                     "time","open","high","low","close","volume",
                     "ct","qav","nt","tbv","tqv","ignore"
                 ])
+
                 for col in ["open","high","low","close"]:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
+
                 df.dropna(inplace=True)
 
                 if not df.empty:
@@ -54,6 +53,40 @@ def get_data(symbol, interval):
     except Exception as e:
         print("Binance error:", e)
 
+    # ✅ 2. BYBIT (backup)
+    try:
+        url = "https://api.bybit.com/v5/market/kline"
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": interval_map.get(interval, "15"),
+            "limit": 200
+        }
+
+        res = requests.get(url, params=params, timeout=10)
+
+        if res.status_code == 200:
+            data = res.json().get("result", {}).get("list", [])
+
+            if data:
+                df = pd.DataFrame(data, columns=[
+                    "time","open","high","low","close","volume","turnover"
+                ])
+
+                df = df[::-1]
+
+                for col in ["open","high","low","close"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+                df.dropna(inplace=True)
+
+                if not df.empty:
+                    print(f"{symbol} {interval} → BYBIT ✅")
+                    return df
+    except Exception as e:
+        print("Bybit error:", e)
+
+    # ⚠️ FINAL FALLBACK
     print(f"{symbol} {interval} → FALLBACK USED ⚠️")
     return fallback_data()
 
@@ -221,7 +254,7 @@ def dashboard():
 
     <body style="background:#0e1117; color:white; font-family:sans-serif;">
 
-        <h2>🚀 Trading Dashboard PRO (No Data Fix)</h2>
+        <h2>🚀 Trading Dashboard PRO (FINAL FIX)</h2>
 
         <div style="display:flex; gap:20px;">
 
