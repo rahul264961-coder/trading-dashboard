@@ -2,12 +2,12 @@ from flask import Flask, request
 import requests
 import pandas as pd
 import plotly.graph_objs as go
+from plotly.subplots import make_subplots # RSI के लिए सब-प्लॉट
 import yfinance as yf
 from datetime import datetime
 
 app = Flask(__name__)
 
-# 5 अलग-अलग वॉचलिस्ट्स
 WATCHLISTS = {
     "Indices": ["^NSEI", "^NSEBANK", "^BSESN", "^INDIAVIX"],
     "Crypto": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"],
@@ -16,123 +16,95 @@ WATCHLISTS = {
     "Favorites": ["RELIANCE.NS", "HDFCBANK.NS", "TCS.NS"]
 }
 
-def get_data(ticker, interval="15m", limit=100):
+def get_data(ticker, interval="15m"):
     try:
         data = yf.download(ticker, period="5d", interval=interval, progress=False)
         if not data.empty:
             df = data[['Open', 'High', 'Low', 'Close']].copy()
             df.columns = ["open", "high", "low", "close"]
-            # EMA Calculations
             df["ema9"] = df["close"].ewm(span=9).mean()
             df["ema15"] = df["close"].ewm(span=15).mean()
             df["ema200"] = df["close"].ewm(span=200).mean()
+            
+            # RSI कैलकुलेशन (इमेज के हिसाब से)
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            df['rsi'] = 100 - (100 / (1 + rs))
             return df
     except: pass
     return pd.DataFrame()
 
-# आपकी पूरी स्ट्रेटजी का लॉजिक यहाँ है
-def analyze_signal(ticker):
-    # Multi-Timeframe Analysis
-    intervals = ["5m", "15m", "1h", "4h"]
-    results = {}
+def get_chart_html(ticker):
+    df = get_data(ticker, "15m")
+    if df.empty: return "<div style='color:orange; padding:50px;'>No Chart Data</div>"
     
-    for itv in intervals:
-        df = get_data(ticker, itv)
-        if df.empty or len(df) < 200: 
-            results[itv] = "SIDE"
-            continue
-            
-        last = df.iloc[-2] # Closed Candle Rule (पिछली कैंडल)
-        # EMA Trend Logic
-        if last['close'] > last['ema9'] > last['ema15'] > last['ema200']:
-            results[itv] = "UP"
-        elif last['close'] < last['ema9'] < last['ema15'] < last['ema200']:
-            results[itv] = "DOWN"
-        else:
-            results[itv] = "SIDE"
+    # इमेज की तरह दो सेक्शन वाला चार्ट (ऊपर कैंडल, नीचे RSI)
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                        vertical_spacing=0.05, row_heights=[0.7, 0.3])
 
-    # Multi-Confirmation Check
-    final_sig = "SIDEWAYS"
-    color = "gray"
-    
-    if all(results[i] == "UP" for i in intervals):
-        final_sig, color = "STRONG BUY", "#00ff00"
-    elif all(results[i] == "DOWN" for i in intervals):
-        final_sig, color = "STRONG SELL", "#ff4444"
-        
-    return final_sig, color
+    # 1. कैंडलस्टिक और EMA लाइन्स
+    fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name="Price"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['ema9'], line=dict(color='#26a69a', width=1), name='EMA 9'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['ema15'], line=dict(color='#2962ff', width=1), name='EMA 15'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['ema200'], line=dict(color='#f44336', width=1.5), name='EMA 200'), row=1, col=1)
+
+    # 2. RSI सेक्शन (नीचे वाला हिस्सा)
+    fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], line=dict(color='#7e57c2', width=1.5), name='RSI (14)'), row=2, col=1)
+    # RSI की 70-30 लाइन्स
+    fig.add_hline(y=70, line_dash="dash", line_color="#444", row=2, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="#444", row=2, col=1)
+
+    fig.update_layout(template="plotly_dark", height=600, margin=dict(l=10,r=10,t=10,b=10),
+                      xaxis_rangeslider_visible=False, paper_bgcolor='#131722', plot_bgcolor='#131722')
+    return fig.to_html(full_html=False)
 
 @app.route("/")
 def dashboard():
     selected_sym = request.args.get('chart', '^NSEI')
     active_tab = request.args.get('tab', 'Indices')
-    
     rows = ""
     for ticker in WATCHLISTS[active_tab]:
-        df = get_data(ticker, "15m")
-        if not df.empty:
-            last = df.iloc[-1]
-            sig, col = analyze_signal(ticker)
-            rows += f"""
-            <tr class='symbol-row' onclick="window.location.href='/?chart={ticker}&tab={active_tab}'">
-                <td><b>{ticker}</b></td>
-                <td>{last['open']:,.1f}</td><td>{last['high']:,.1f}</td>
-                <td>{last['low']:,.1f}</td><td style='color:#00d1ff;'>{last['close']:,.1f}</td>
-                <td style='color:{col}; font-weight:bold;'>{sig}</td>
-            </tr>"""
+        df_row = get_data(ticker, "15m")
+        if not df_row.empty:
+            last = df_row.iloc[-1]
+            rows += f"<tr class='symbol-row' onclick=\"window.location.href='/?chart={ticker}&tab={active_tab}'\" style='cursor:pointer;'><td><b>{ticker}</b></td><td>{last['open']:,.1f}</td><td>{last['high']:,.1f}</td><td>{last['low']:,.1f}</td><td style='color:#00d1ff;'>{last['close']:,.1f}</td></tr>"
 
     return f"""
     <html>
-    <head>
-        <meta http-equiv="refresh" content="60">
-        <style>
-            body {{ background:#0e1117; color:white; font-family:sans-serif; margin:0; padding:20px; }}
-            .card {{ background:#1a1c24; border-radius:12px; padding:15px; border:1px solid #333; }}
-            .tab-btn {{ background:#333; color:white; border:none; padding:10px; cursor:pointer; border-radius:5px; margin-right:5px; }}
-            .active-tab {{ background:#00d1ff; color:black; }}
-            table {{ width:100%; text-align:left; border-collapse: collapse; font-size: 13px; }}
-            th {{ color:#888; border-bottom:1px solid #444; padding:10px; }}
-            td {{ padding:10px; border-bottom:1px solid #222; }}
-        </style>
+    <head><meta http-equiv="refresh" content="60">
+    <style>
+        body {{ background:#0e1117; color:white; font-family:sans-serif; margin:0; padding:20px; }}
+        .card {{ background:#1a1c24; border-radius:12px; padding:20px; border:1px solid #333; }}
+        .tab-btn {{ background:#333; color:white; border:none; padding:10px 15px; cursor:pointer; border-radius:5px; margin-right:5px; }}
+        .active-tab {{ background:#00d1ff; color:black; font-weight:bold; }}
+        table {{ width:100%; text-align:left; border-collapse: collapse; }}
+        td {{ padding:12px 10px; border-bottom:1px solid #222; font-size:14px; }}
+        .symbol-row:hover {{ background:#2d2f3b; }}
+    </style>
     </head>
     <body>
-        <h2 style='text-align:center;'>📊 PRO MULTI-STRATEGY HUB</h2>
-        
-        <!-- Watchlist Tabs -->
-        <div style="margin-bottom:15px;">
+        <h2 style='text-align:center; color:#00d1ff;'>🚀 NEXT-GEN TRADING HUB PRO</h2>
+        <div style="margin-bottom:20px; text-align:center;">
             {' '.join([f"<button class='tab-btn {'active-tab' if t==active_tab else ''}' onclick=\\\"window.location.href='/?tab={t}'\\\">{t}</button>" for t in WATCHLISTS.keys()])}
         </div>
-
-        <div style="display:flex; gap:20px;">
-            <div class="card" style="flex:1;">
-                <input type="text" id="search" onkeyup="filter()" placeholder="Search symbols..." style="width:100%; padding:10px; margin-bottom:10px; background:#222; border:1px solid #444; color:white;">
-                <table>
-                    <tr><th>SYMBOL</th><th>O</th><th>H</th><th>L</th><th>C</th><th>SIGNAL</th></tr>
-                    {rows}
-                </table>
+        <div style="display:flex; gap:20px; flex-wrap:wrap;">
+            <div class="card" style="flex:1; min-width:350px; max-height:650px; overflow-y:auto;">
+                <table id="wTable"><tr><th>SYMBOL</th><th>O</th><th>H</th><th>L</th><th>C</th></tr>{rows}</table>
             </div>
-            <div class="card" style="flex:2;">
-                <h3>Analysis: {selected_sym}</h3>
-                <div style="height:450px; background:#000; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#444;">
-                   [ Interactive Plotly Chart with EMA 9, 15, 200 ]
-                </div>
+            <div class="card" style="flex:2.5; min-width:550px;">
+                <h3 style='margin-top:0;'>Live Chart: {selected_sym}</h3>
+                {get_chart_html(selected_sym)}
             </div>
         </div>
-
-        <script>
-            function filter() {{
-                let val = document.getElementById('search').value.toUpperCase();
-                let rows = document.getElementsByClassName('symbol-row');
-                for (let r of rows) {{ r.style.display = r.innerText.toUpperCase().includes(val) ? "" : "none"; }}
-            }}
-        </script>
     </body>
-    </html>
-    """
+    </html>"""
 
 if __name__ == "__main__":
     import os
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
