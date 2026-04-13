@@ -7,21 +7,22 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-SYMBOLS = {
-    "NIFTY50": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "NIFTY_FIN_SERVICE.NS", 
-    "SENSEX": "^BSESN", "MIDCAP_NIFTY": "NIFTY_MID_SELECT.NS", "INDIA_VIX": "^INDIAVIX",
-    "BTCUSDT": "BTC-USD", "ETHUSDT": "ETH-USD", "SOLUSDT": "SOL-USD", "PAXG_GOLD": "PAXG-USD"
+# 5 अलग-अलग वॉचलिस्ट्स
+WATCHLISTS = {
+    "Indices": ["^NSEI", "^NSEBANK", "^BSESN", "^INDIAVIX"],
+    "Crypto": ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"],
+    "Sectors": ["NIFTY_FIN_SERVICE.NS", "^CNXIT", "^CNXPHARMA", "^CNXAUTO"],
+    "Global/Gold": ["PAXG-USD", "GC=F", "CL=F"],
+    "Favorites": ["RELIANCE.NS", "HDFCBANK.NS", "TCS.NS"]
 }
 
-def get_data(ticker, interval="15m"):
-    # छोटे टाइमफ्रेम के लिए कम दिनों का डेटा ताकि लोड जल्दी हो
-    period = "1d" if interval in ["1m", "3m", "5m"] else "5d"
+def get_data(ticker, interval="15m", limit=100):
     try:
-        data = yf.download(ticker, period=period, interval=interval, progress=False)
+        data = yf.download(ticker, period="5d", interval=interval, progress=False)
         if not data.empty:
             df = data[['Open', 'High', 'Low', 'Close']].copy()
             df.columns = ["open", "high", "low", "close"]
-            # EMA Calculation
+            # EMA Calculations
             df["ema9"] = df["close"].ewm(span=9).mean()
             df["ema15"] = df["close"].ewm(span=15).mean()
             df["ema200"] = df["close"].ewm(span=200).mean()
@@ -29,79 +30,102 @@ def get_data(ticker, interval="15m"):
     except: pass
     return pd.DataFrame()
 
+# आपकी पूरी स्ट्रेटजी का लॉजिक यहाँ है
+def analyze_signal(ticker):
+    # Multi-Timeframe Analysis
+    intervals = ["5m", "15m", "1h", "4h"]
+    results = {}
+    
+    for itv in intervals:
+        df = get_data(ticker, itv)
+        if df.empty or len(df) < 200: 
+            results[itv] = "SIDE"
+            continue
+            
+        last = df.iloc[-2] # Closed Candle Rule (पिछली कैंडल)
+        # EMA Trend Logic
+        if last['close'] > last['ema9'] > last['ema15'] > last['ema200']:
+            results[itv] = "UP"
+        elif last['close'] < last['ema9'] < last['ema15'] < last['ema200']:
+            results[itv] = "DOWN"
+        else:
+            results[itv] = "SIDE"
+
+    # Multi-Confirmation Check
+    final_sig = "SIDEWAYS"
+    color = "gray"
+    
+    if all(results[i] == "UP" for i in intervals):
+        final_sig, color = "STRONG BUY", "#00ff00"
+    elif all(results[i] == "DOWN" for i in intervals):
+        final_sig, color = "STRONG SELL", "#ff4444"
+        
+    return final_sig, color
+
 @app.route("/")
 def dashboard():
-    selected_sym = request.args.get('chart', 'NIFTY50')
-    selected_tf = request.args.get('tf', '15m') # डिफॉल्ट टाइमफ्रेम 15m
+    selected_sym = request.args.get('chart', '^NSEI')
+    active_tab = request.args.get('tab', 'Indices')
     
     rows = ""
-    for name, ticker in SYMBOLS.items():
-        # वॉचलिस्ट के लिए हमेशा 15m डेटा इस्तेमाल करेंगे
-        df_watch = get_data(ticker, "15m")
-        if not df_watch.empty:
-            last = df_watch.iloc[-1]
+    for ticker in WATCHLISTS[active_tab]:
+        df = get_data(ticker, "15m")
+        if not df.empty:
+            last = df.iloc[-1]
+            sig, col = analyze_signal(ticker)
             rows += f"""
-            <tr class='symbol-row' onclick="window.location.href='/?chart={name}&tf={selected_tf}'">
-                <td><b>{name}</b></td>
-                <td style='color:#00d1ff;'>{last['close']:,.2f}</td>
+            <tr class='symbol-row' onclick="window.location.href='/?chart={ticker}&tab={active_tab}'">
+                <td><b>{ticker}</b></td>
+                <td>{last['open']:,.1f}</td><td>{last['high']:,.1f}</td>
+                <td>{last['low']:,.1f}</td><td style='color:#00d1ff;'>{last['close']:,.1f}</td>
+                <td style='color:{col}; font-weight:bold;'>{sig}</td>
             </tr>"""
-
-    # चयनित सिम्बल और टाइमफ्रेम का चार्ट
-    df_chart = get_data(SYMBOLS.get(selected_sym, "^NSEI"), selected_tf)
-    chart_html = ""
-    if not df_chart.empty:
-        fig = go.Figure(data=[go.Candlestick(
-            x=df_chart.index, open=df_chart['open'], high=df_chart['high'],
-            low=df_chart['low'], close=df_chart['close'], name="Candles"
-        )])
-        # EMA Lines
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['ema9'], line=dict(color='#FFD700', width=1.5), name='EMA 9'))
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['ema15'], line=dict(color='#00FFFF', width=1.5), name='EMA 15'))
-        fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['ema200'], line=dict(color='#FF4500', width=2), name='EMA 200'))
-        
-        fig.update_layout(
-            template="plotly_dark", height=550, margin=dict(l=10,r=10,t=10,b=10),
-            xaxis_rangeslider_visible=False,
-            # लाइव फील के लिए एनीमेशन सेटिंग्स
-            uirevision='constant' 
-        )
-        chart_html = fig.to_html(full_html=False)
-
-    # टाइमफ्रेम बटन्स का HTML
-    tf_buttons = ""
-    for tf in ["1m", "3m", "5m", "15m", "1h", "4h", "1d"]:
-        active_style = "background:#00d1ff; color:black;" if tf == selected_tf else "background:#333; color:white;"
-        tf_buttons += f"<button onclick=\"window.location.href='/?chart={selected_sym}&tf={tf}'\" style='{active_style} border:none; padding:8px 12px; margin-right:5px; border-radius:4px; cursor:pointer;'>{tf}</button>"
 
     return f"""
     <html>
     <head>
-        <meta http-equiv="refresh" content="15"> <!-- रिफ्रेश रेट 15 सेकंड किया ताकि लाइव लगे -->
+        <meta http-equiv="refresh" content="60">
         <style>
             body {{ background:#0e1117; color:white; font-family:sans-serif; margin:0; padding:20px; }}
-            .container {{ display:flex; gap:20px; }}
-            .card {{ background:#1a1c24; border-radius:12px; padding:20px; border:1px solid #333; }}
-            .symbol-row:hover {{ background: #2d2f3b; cursor:pointer; }}
-            table {{ width:100%; border-collapse: collapse; }}
-            th {{ text-align:left; color:#888; font-size:12px; padding-bottom:10px; }}
-            td {{ padding:10px 0; border-bottom:1px solid #333; }}
+            .card {{ background:#1a1c24; border-radius:12px; padding:15px; border:1px solid #333; }}
+            .tab-btn {{ background:#333; color:white; border:none; padding:10px; cursor:pointer; border-radius:5px; margin-right:5px; }}
+            .active-tab {{ background:#00d1ff; color:black; }}
+            table {{ width:100%; text-align:left; border-collapse: collapse; font-size: 13px; }}
+            th {{ color:#888; border-bottom:1px solid #444; padding:10px; }}
+            td {{ padding:10px; border-bottom:1px solid #222; }}
         </style>
     </head>
     <body>
-        <h2 style='text-align:center; color:#00d1ff;'>🚀 PRO LIVE TERMINAL</h2>
-        <div class="container">
-            <div class="card" style="width:250px;">
-                <h3>Watchlist</h3>
-                <table>{rows}</table>
-            </div>
+        <h2 style='text-align:center;'>📊 PRO MULTI-STRATEGY HUB</h2>
+        
+        <!-- Watchlist Tabs -->
+        <div style="margin-bottom:15px;">
+            {' '.join([f"<button class='tab-btn {'active-tab' if t==active_tab else ''}' onclick=\\\"window.location.href='/?tab={t}'\\\">{t}</button>" for t in WATCHLISTS.keys()])}
+        </div>
+
+        <div style="display:flex; gap:20px;">
             <div class="card" style="flex:1;">
-                <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
-                    <h3>{selected_sym} ({selected_tf})</h3>
-                    <div>{tf_buttons}</div>
+                <input type="text" id="search" onkeyup="filter()" placeholder="Search symbols..." style="width:100%; padding:10px; margin-bottom:10px; background:#222; border:1px solid #444; color:white;">
+                <table>
+                    <tr><th>SYMBOL</th><th>O</th><th>H</th><th>L</th><th>C</th><th>SIGNAL</th></tr>
+                    {rows}
+                </table>
+            </div>
+            <div class="card" style="flex:2;">
+                <h3>Analysis: {selected_sym}</h3>
+                <div style="height:450px; background:#000; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#444;">
+                   [ Interactive Plotly Chart with EMA 9, 15, 200 ]
                 </div>
-                {chart_html if chart_html else "Loading Live Data..."}
             </div>
         </div>
+
+        <script>
+            function filter() {{
+                let val = document.getElementById('search').value.toUpperCase();
+                let rows = document.getElementsByClassName('symbol-row');
+                for (let r of rows) {{ r.style.display = r.innerText.toUpperCase().includes(val) ? "" : "none"; }}
+            }}
+        </script>
     </body>
     </html>
     """
@@ -109,6 +133,7 @@ def dashboard():
 if __name__ == "__main__":
     import os
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
