@@ -1,7 +1,6 @@
 flask
-gunicorn
-pandas
-requests
-plotly
 yfinance
+pandas
+plotly
+
 
